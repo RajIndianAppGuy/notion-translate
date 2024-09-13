@@ -201,9 +201,15 @@ const processPageSequentially = async (row) => {
       .slice(0, 5);
 
     for (let row of rows) {
+      console.log(`Processing row with ID: ${row.id}`);
       await processPageSequentially(row);
+      console.log(`Finished processing row with ID: ${row.id}`);
     }
   } catch (error) {
     console.error("Critical error:", error.message);
   }
 })();
+
+setInterval(() => {
+  console.log("Script is still running...");
+}, 60000);
