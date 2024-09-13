@@ -62,8 +62,17 @@ const downloadImage = async (url, outputPath, retries = 3, delay = 2000) => {
 };
 
 app.get("/translate-and-duplicate-page", async function (req, res) {
+  const translationDatabaseIds = [
+    {
+      fr: "0056ec4f5d06432fbe69452a040cd001",
+    },
+    { es: "14a33a8556044cf5b768b570513b2dad" },
+    // de: "25a22666a54a430081f6e0ab3c340f82",
+    // it: "10043bee00728068a565d23cb6e7871c",
+    // pt: "10043bee0072807ca931c8c80212b3f3",
+    // ko: "8d00530810bb4ba2b56ebe5337c0c4b7",
+  ];
   const sourceDatabaseID = "0b660fa5403349cf8fa2de5a49fd275f";
-  const translationDatabaseIds = [{ fr: "0056ec4f5d06432fbe69452a040cd001" }];
 
   try {
     let rows = await notion.databases.query({
@@ -78,8 +87,16 @@ app.get("/translate-and-duplicate-page", async function (req, res) {
     let errorMessages = [];
 
     for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
       for (let j = 0; j < translationDatabaseIds.length; j++) {
+        const row = rows[i];
+        const translateText = async (text) => {
+          if (!text) return "";
+          console.log(`Translating text: ${text}`);
+          return await translate(text, {
+            from: "en",
+            to: `${Object.keys(translationDatabaseIds[j])[0]}`,
+          });
+        };
         try {
           const response = await notion.pages.create({
             parent: {
@@ -93,7 +110,7 @@ app.get("/translate-and-duplicate-page", async function (req, res) {
           });
 
           const destinationPageId = response.id;
-          const {
+          let {
             Name,
             Published,
             Date,
@@ -109,6 +126,11 @@ app.get("/translate-and-duplicate-page", async function (req, res) {
 
           const AuthorSlug = row.properties["Author Slug"];
 
+          let translatedName = await translateText(Name.title[0].text.content);
+          let translatedDesc = await translateText(
+            Desc.rich_text[0].text.content
+          );
+
           await notion.pages.update({
             page_id: destinationPageId,
             properties: {
@@ -116,7 +138,7 @@ app.get("/translate-and-duplicate-page", async function (req, res) {
                 title: [
                   {
                     text: {
-                      content: Name?.title?.[0]?.text?.content || "Untitled",
+                      content: translatedName,
                     },
                   },
                 ],
@@ -150,7 +172,7 @@ app.get("/translate-and-duplicate-page", async function (req, res) {
                 rich_text: [
                   {
                     text: {
-                      content: Desc?.rich_text?.[0]?.text?.content || "",
+                      content: translatedDesc,
                     },
                   },
                 ],
@@ -213,7 +235,11 @@ app.get("/translate-and-duplicate-page", async function (req, res) {
             },
           });
 
-          console.log("Destination page updated successfully.");
+          console.log(
+            `Destination page updated successfully. in ${
+              Object.keys(translationDatabaseIds[j])[0]
+            } for pageId ${Object.values(translationDatabaseIds[j])[0]}`
+          );
 
           const blocks = await notion.blocks.children.list({
             block_id: row.id,
@@ -231,15 +257,6 @@ app.get("/translate-and-duplicate-page", async function (req, res) {
               .map((richText) => richText.plain_text)
               .join("");
             return text;
-          };
-
-          const translateText = async (text) => {
-            if (!text) return "";
-            console.log(`Translating text: ${text}`);
-            return await translate(text, {
-              from: "en",
-              to: `${Object.keys(translationDatabaseIds[j])[0]}`,
-            });
           };
 
           const uploadToSupabase = async (filePath, fileName) => {
@@ -306,7 +323,9 @@ app.get("/translate-and-duplicate-page", async function (req, res) {
             }
 
             const originalText = formatBlock(block);
-            const translatedText = originalText;
+            const translatedText = await translateText(originalText);
+
+            console.log("translated text: ", translatedText);
 
             if (translatedText) {
               childrenToAppend.push({
@@ -326,7 +345,6 @@ app.get("/translate-and-duplicate-page", async function (req, res) {
             }
           }
 
-          // Append all children at once
           if (childrenToAppend.length > 0) {
             console.log(
               "Appending all collected blocks to destination page..."
