@@ -6,6 +6,7 @@ const supabase = require("@supabase/supabase-js");
 const fs = require("fs");
 const path = require("path");
 const fetch = require("node-fetch");
+const crypto = require("crypto");
 
 const app = express();
 const notion = new Client({
@@ -17,312 +18,382 @@ const supabaseClient = supabase.createClient(
   process.env.SUPABASE_KEY
 );
 
-const downloadImage = async (url, outputPath) => {
+const generateAlphanumeric = (length) => {
+  return crypto.randomBytes(length).toString("hex");
+};
+
+const downloadImage = async (url, outputPath, retries = 3, delay = 2000) => {
   console.log(`Downloading image from URL: ${url}`);
   const localImagePath = path.resolve(outputPath);
 
-  const response = await fetch(url);
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(url);
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch image: ${response.statusText}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch image: ${response.statusText}`);
+      }
+
+      const fileStream = fs.createWriteStream(localImagePath);
+
+      return new Promise((resolve, reject) => {
+        response.body.pipe(fileStream);
+        response.body.on("error", (err) => {
+          reject(err);
+        });
+        fileStream.on("finish", () => {
+          console.log(`Image downloaded and saved at: ${localImagePath}`);
+          resolve(localImagePath);
+        });
+      });
+    } catch (error) {
+      console.error(
+        `Attempt ${attempt} - Error downloading image: ${error.message}`
+      );
+
+      if (attempt < retries) {
+        console.log(`Retrying in ${delay / 1000} seconds...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      } else {
+        throw new Error(`Failed to download image after ${retries} attempts`);
+      }
+    }
   }
-
-  const fileStream = fs.createWriteStream(localImagePath);
-
-  return new Promise((resolve, reject) => {
-    response.body.pipe(fileStream);
-    response.body.on("error", (err) => {
-      reject(err);
-    });
-    fileStream.on("finish", () => {
-      console.log(`Image downloaded and saved at: ${localImagePath}`);
-      resolve(localImagePath);
-    });
-  });
 };
 
 app.get("/translate-and-duplicate-page", async function (req, res) {
-  const sourcePageId = "5b4452291b6947a4be62d664c674118b";
-  const destinationPageId = "ba747699f09a4ac5bf33fcabdc6721a6";
+  const sourceDatabaseID = "0b660fa5403349cf8fa2de5a49fd275f";
+  const translationDatabaseIds = [{ fr: "0056ec4f5d06432fbe69452a040cd001" }];
 
   try {
-    console.log("Fetching source page properties...");
-    const sourcePageProperties = await notion.pages.retrieve({
-      page_id: sourcePageId,
+    let rows = await notion.databases.query({
+      database_id: sourceDatabaseID,
     });
-    console.log("Source page properties retrieved.");
 
-    const {
-      Name,
-      Published,
-      Date,
-      Slug,
-      Desc,
-      Tags,
-      OGimage,
-      keywords,
-      Category,
-      ContainsTOC,
-      FilesAndMedia,
-    } = sourcePageProperties.properties;
+    rows = rows.results
+      .filter((row) => row.properties.Published?.checkbox === true)
+      .slice(0, 5);
 
-    const AuthorSlug = sourcePageProperties.properties["Author Slug"];
+    let successMessages = [];
+    let errorMessages = [];
 
-    console.log("Updating destination page properties...");
-    await notion.pages.update({
-      page_id: destinationPageId,
-      properties: {
-        Name: {
-          title: [
-            {
-              text: {
-                content: Name?.title?.[0]?.text?.content || "Untitled",
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      for (let j = 0; j < translationDatabaseIds.length; j++) {
+        try {
+          const response = await notion.pages.create({
+            parent: {
+              database_id: Object.values(translationDatabaseIds[j])[0],
+            },
+            properties: {
+              Published: {
+                checkbox: true,
               },
             },
-          ],
-          id: Name?.id,
-        },
-        Published: Published
-          ? {
-              checkbox: Published.checkbox,
-              id: Published.id,
-            }
-          : undefined,
-        Date: Date?.date
-          ? {
-              date: {
-                start: Date.date.start,
+          });
+
+          const destinationPageId = response.id;
+          const {
+            Name,
+            Published,
+            Date,
+            Slug,
+            Desc,
+            Tags,
+            OGimage,
+            keywords,
+            Category,
+            ContainsTOC,
+            FilesAndMedia,
+          } = row.properties;
+
+          const AuthorSlug = row.properties["Author Slug"];
+
+          await notion.pages.update({
+            page_id: destinationPageId,
+            properties: {
+              Name: {
+                title: [
+                  {
+                    text: {
+                      content: Name?.title?.[0]?.text?.content || "Untitled",
+                    },
+                  },
+                ],
+                id: Name?.id,
               },
-              id: Date.id,
-            }
-          : undefined,
-        Slug: {
-          rich_text: [
-            {
-              text: {
-                content: Slug?.rich_text?.[0]?.text?.content || "",
+              Published: Published
+                ? {
+                    checkbox: Published.checkbox,
+                    id: Published.id,
+                  }
+                : undefined,
+              Date: Date?.date
+                ? {
+                    date: {
+                      start: Date.date.start,
+                    },
+                    id: Date.id,
+                  }
+                : undefined,
+              Slug: {
+                rich_text: [
+                  {
+                    text: {
+                      content: Slug?.rich_text?.[0]?.text?.content || "",
+                    },
+                  },
+                ],
+                id: Slug?.id,
               },
-            },
-          ],
-          id: Slug?.id,
-        },
-        Desc: {
-          rich_text: [
-            {
-              text: {
-                content: Desc?.rich_text?.[0]?.text?.content || "",
+              Desc: {
+                rich_text: [
+                  {
+                    text: {
+                      content: Desc?.rich_text?.[0]?.text?.content || "",
+                    },
+                  },
+                ],
+                id: Desc?.id,
               },
-            },
-          ],
-          id: Desc?.id,
-        },
-        Tags: Tags?.multi_select
-          ? {
-              multi_select: Tags.multi_select.map((tag) => ({
-                name: tag.name,
-              })),
-              id: Tags?.id,
-            }
-          : undefined,
-        OGimage:
-          OGimage?.id && OGimage?.url
-            ? {
-                id: OGimage.id,
-                url: OGimage.url,
-              }
-            : undefined,
-        keywords: keywords?.multi_select
-          ? {
-              multi_select: keywords.multi_select.map((tag) => ({
-                name: tag.name,
-              })),
-              id: keywords?.id,
-            }
-          : undefined,
-        Category: {
-          select: {
-            name: Category?.select?.name || "",
-          },
-          id: Category?.id,
-        },
-        ContainsTOC: ContainsTOC
-          ? {
-              checkbox: ContainsTOC.checkbox,
-              id: ContainsTOC?.id,
-            }
-          : undefined,
-        "Author Slug":
-          AuthorSlug?.id && AuthorSlug?.select
-            ? {
-                id: AuthorSlug.id,
+              Tags: Tags?.multi_select
+                ? {
+                    multi_select: Tags.multi_select.map((tag) => ({
+                      name: tag.name,
+                    })),
+                    id: Tags?.id,
+                  }
+                : undefined,
+              OGimage:
+                OGimage?.id && OGimage?.url
+                  ? {
+                      id: OGimage.id,
+                      url: OGimage.url,
+                    }
+                  : undefined,
+              keywords: keywords?.multi_select
+                ? {
+                    multi_select: keywords.multi_select.map((tag) => ({
+                      name: tag.name,
+                    })),
+                    id: keywords?.id,
+                  }
+                : undefined,
+              Category: {
                 select: {
-                  name: AuthorSlug?.select?.name || "",
+                  name: Category?.select?.name || "",
                 },
-              }
-            : undefined,
-
-        FilesAndMedia: FilesAndMedia?.files
-          ? {
-              files: FilesAndMedia.files.map((file) => ({
-                name: file.name,
-                type: file.type,
-                file: file.file,
-              })),
-              id: FilesAndMedia?.id,
-            }
-          : undefined,
-      },
-    });
-    console.log("Destination page updated successfully.");
-
-    console.log("Fetching child blocks from source page...");
-    const blocks = await notion.blocks.children.list({
-      block_id: sourcePageId,
-    });
-    console.log("Source page child blocks retrieved.");
-
-    const formatBlock = (block) => {
-      if (block.type === "image") {
-        return block.image.file
-          ? { type: "file", url: block.image.file.url }
-          : { type: "external", url: block.image.external.url };
-      }
-
-      const richTextArray = block[block.type]?.rich_text || [];
-      const text = richTextArray
-        .map((richText) => richText.plain_text)
-        .join("");
-      return text;
-    };
-
-    const translateText = async (text) => {
-      if (!text) return "";
-      console.log(`Translating text: ${text}`);
-      return await translate(text, { from: "en", to: "fr" });
-    };
-
-    const uploadToSupabase = async (filePath, fileName) => {
-      console.log(`Uploading ${fileName} to Supabase...`);
-      const fileBuffer = fs.readFileSync(filePath);
-      const { error } = await supabaseClient.storage
-        .from("ppt")
-        .upload(fileName, fileBuffer, {
-          contentType: "image/jpeg",
-        });
-
-      if (error) {
-        throw new Error("Error uploading to Supabase: " + error.message);
-      }
-
-      const { data } = supabaseClient.storage
-        .from("ppt")
-        .getPublicUrl(fileName);
-
-      if (error) {
-        console.error("Error getting public URL:", error.message);
-      } else {
-        console.log(`Uploaded image available at: ${data.publicUrl}`);
-        return data.publicUrl;
-      }
-    };
-
-    // Collect data to append in one request
-    let childrenToAppend = [];
-
-    for (const block of blocks.results) {
-      const blockType = block.type;
-
-      if (blockType === "image") {
-        const imageDetails = formatBlock(block);
-        console.log(`Processing image block: ${imageDetails.url}`);
-
-        // Store the image locally and upload to Supabase
-        const randomInteger = Math.floor(Math.random() * 1000);
-        const localImagePath = path.join(__dirname, "download-img.jpg");
-        await downloadImage(imageDetails.url, localImagePath);
-        const supabaseUrl = await uploadToSupabase(
-          localImagePath,
-          `image${randomInteger}.jpg`
-        );
-
-        // Collect image block to append later
-        childrenToAppend.push({
-          object: "block",
-          type: "image",
-          image: {
-            type: "external",
-            external: {
-              url: supabaseUrl,
-            },
-          },
-        });
-
-        // Remove the local image after processing
-        await fs.promises.unlink(localImagePath);
-        console.log("Local image file removed after processing.");
-        continue; // Skip text translation for image blocks
-      }
-
-      const originalText = formatBlock(block);
-      const translatedText = await translateText(originalText);
-
-      if (translatedText) {
-        console.log(`Collected translated block: ${translatedText}`);
-        // Collect text block to append later
-        childrenToAppend.push({
-          object: "block",
-          type: blockType,
-          [blockType]: {
-            rich_text: [
-              {
-                type: "text",
-                text: {
-                  content: translatedText,
-                },
+                id: Category?.id,
               },
-            ],
-          },
-        });
+              ContainsTOC: ContainsTOC
+                ? {
+                    checkbox: ContainsTOC.checkbox,
+                    id: ContainsTOC?.id,
+                  }
+                : undefined,
+              "Author Slug":
+                AuthorSlug?.id && AuthorSlug?.select
+                  ? {
+                      id: AuthorSlug.id,
+                      select: {
+                        name: AuthorSlug?.select?.name || "",
+                      },
+                    }
+                  : undefined,
+              FilesAndMedia: FilesAndMedia?.files
+                ? {
+                    files: FilesAndMedia.files.map((file) => ({
+                      name: file.name,
+                      type: file.type,
+                      file: file.file,
+                    })),
+                    id: FilesAndMedia?.id,
+                  }
+                : undefined,
+            },
+          });
+
+          console.log("Destination page updated successfully.");
+
+          const blocks = await notion.blocks.children.list({
+            block_id: row.id,
+          });
+
+          const formatBlock = (block) => {
+            if (block.type === "image") {
+              return block.image.file
+                ? { type: "file", url: block.image.file.url }
+                : { type: "external", url: block.image.external.url };
+            }
+
+            const richTextArray = block[block.type]?.rich_text || [];
+            const text = richTextArray
+              .map((richText) => richText.plain_text)
+              .join("");
+            return text;
+          };
+
+          const translateText = async (text) => {
+            if (!text) return "";
+            console.log(`Translating text: ${text}`);
+            return await translate(text, {
+              from: "en",
+              to: `${Object.keys(translationDatabaseIds[j])[0]}`,
+            });
+          };
+
+          const uploadToSupabase = async (filePath, fileName) => {
+            console.log(`Uploading ${fileName} to Supabase...`);
+            const fileBuffer = fs.readFileSync(filePath);
+            const { error } = await supabaseClient.storage
+              .from("ppt")
+              .upload(fileName, fileBuffer, {
+                contentType: "image/jpeg",
+              });
+
+            if (error) {
+              throw new Error("Error uploading to Supabase: " + error.message);
+            }
+
+            const { data } = supabaseClient.storage
+              .from("ppt")
+              .getPublicUrl(fileName);
+
+            if (error) {
+              console.error("Error getting public URL:", error.message);
+            } else {
+              console.log(`Uploaded image available at: ${data.publicUrl}`);
+              return data.publicUrl;
+            }
+          };
+
+          let childrenToAppend = [];
+
+          for (const block of blocks.results) {
+            const blockType = block.type;
+
+            if (blockType === "image") {
+              const imageDetails = formatBlock(block);
+              console.log(`Processing image block: ${imageDetails.url}`);
+
+              // Generate random alphanumeric string for image name
+              const imageFileName = `image_${generateAlphanumeric(10)}.jpg`;
+              const localImagePath = path.join(__dirname, imageFileName);
+
+              // Download and upload image
+              await downloadImage(imageDetails.url, localImagePath);
+              const supabaseUrl = await uploadToSupabase(
+                localImagePath,
+                imageFileName
+              );
+
+              // Collect image block to append later
+              childrenToAppend.push({
+                object: "block",
+                type: "image",
+                image: {
+                  type: "external",
+                  external: {
+                    url: supabaseUrl,
+                  },
+                },
+              });
+
+              // Remove the local image after processing
+              await fs.promises.unlink(localImagePath);
+              console.log("Local image file removed after processing.");
+              continue; // Skip text translation for image blocks
+            }
+
+            const originalText = formatBlock(block);
+            const translatedText = originalText;
+
+            if (translatedText) {
+              childrenToAppend.push({
+                object: "block",
+                type: blockType,
+                [blockType]: {
+                  rich_text: [
+                    {
+                      type: "text",
+                      text: {
+                        content: translatedText,
+                      },
+                    },
+                  ],
+                },
+              });
+            }
+          }
+
+          // Append all children at once
+          if (childrenToAppend.length > 0) {
+            console.log(
+              "Appending all collected blocks to destination page..."
+            );
+            await notion.blocks.children.append({
+              block_id: destinationPageId,
+              children: childrenToAppend,
+            });
+            console.log("All blocks appended successfully.");
+          }
+
+          successMessages.push(
+            `Page ${destinationPageId} translated successfully to ${
+              Object.keys(translationDatabaseIds[j])[0]
+            }`
+          );
+        } catch (err) {
+          console.error("Error during processing:", err.message);
+          errorMessages.push(
+            `Failed to process row ${i} for translation ${j}: ${err.message}`
+          );
+        }
       }
     }
-
-    // Append all children at once
-    if (childrenToAppend.length > 0) {
-      console.log("Appending all collected blocks to destination page...");
-      await notion.blocks.children.append({
-        block_id: destinationPageId,
-        children: childrenToAppend,
-      });
-      console.log("All blocks appended successfully.");
-    }
-
-    res.json({
+    res.status(200).json({
       message: "success",
-      content:
-        "Page content and properties translated and added to the new page successfully.",
+      successMessages: successMessages,
+      errorMessages: errorMessages,
     });
   } catch (error) {
-    console.error("Error:", error);
-    res.status(500).json({ message: "error", error: error.message });
+    console.error("Critical error:", error);
+    res.status(500).json({
+      message: "error",
+      error: error.message,
+    });
   }
 });
 
-app.get("/get-block-children", async function (req, res) {
-  const blockId = "0bffa2aa66f541ca9794d323c0a47d59"; // Block ID for which you want to retrieve children
+app.get("/get-page-rows-children", async function (req, res) {
+  const pageId = "0b660fa5403349cf8fa2de5a49fd275f"; // The ID of the database
 
   try {
-    console.log("Fetching child blocks for block ID:", blockId);
-    const blockChildren = await notion.blocks.children.list({
-      block_id: blockId,
+    console.log("Fetching rows for page ID:", pageId);
+
+    // Fetch the rows (database query)
+    const notionResponse = await notion.databases.query({
+      database_id: pageId,
     });
 
-    console.log("Child blocks retrieved successfully.");
+    const rows = notionResponse.results
+      .filter((row) => row.properties.Published?.checkbox === true)
+      .slice(0, 5); // Limit to 5 rows
+    let allChildren = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      allChildren.push(row);
+    }
+
+    console.log("Successfully fetched and processed the first 5 rows.");
+
     res.json({
       message: "success",
-      children: blockChildren,
+      rows: allChildren,
     });
   } catch (error) {
-    console.error("Error fetching block children:", error);
+    console.error("Error fetching rows:", error);
     res.status(500).json({
       message: "error",
       error: error.message,
