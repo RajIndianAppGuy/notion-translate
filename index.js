@@ -98,96 +98,101 @@ const formatBlock = (block) => {
   return richTextArray.map((richText) => richText.plain_text).join("");
 };
 
-// Helper: Process an individual row and translate it
-const processPage = async (row, languageKey, databaseId) => {
-  try {
-    // Translate title and description
-    const translatedName = await translateText(
-      row.properties.Name.title[0].text.content,
-      languageKey
-    );
-    const translatedDesc = await translateText(
-      row.properties.Desc.rich_text[0].text.content,
-      languageKey
-    );
+// Helper: Process an individual row and translate it sequentially
+const processPageSequentially = async (row) => {
+  for (const [languageKey, databaseId] of Object.entries(
+    translationDatabaseIds
+  )) {
+    try {
+      // Translate title and description
+      const translatedName = await translateText(
+        row.properties.Name.title[0].text.content,
+        languageKey
+      );
+      const translatedDesc = await translateText(
+        row.properties.Desc.rich_text[0].text.content,
+        languageKey
+      );
 
-    // Create a page in the translation database
-    const response = await notion.pages.create({
-      parent: { database_id: databaseId },
-      properties: { Published: { checkbox: true } },
-    });
-    const destinationPageId = response.id;
+      // Create a page in the translation database
+      const response = await notion.pages.create({
+        parent: { database_id: databaseId },
+        properties: { Published: { checkbox: true } },
+      });
+      const destinationPageId = response.id;
 
-    // Update the newly created page with translated content
-    await notion.pages.update({
-      page_id: destinationPageId,
-      properties: {
-        Name: { title: [{ text: { content: translatedName } }] },
-        Desc: { rich_text: [{ text: { content: translatedDesc } }] },
-      },
-    });
+      // Update the newly created page with translated content
+      await notion.pages.update({
+        page_id: destinationPageId,
+        properties: {
+          Name: { title: [{ text: { content: translatedName } }] },
+          Desc: { rich_text: [{ text: { content: translatedDesc } }] },
+        },
+      });
 
-    console.log(
-      `Translated page created in ${languageKey} with ID: ${destinationPageId}`
-    );
+      console.log(
+        `Translated page created in ${languageKey} with ID: ${destinationPageId}`
+      );
 
-    // Fetch and translate blocks (e.g., images, text blocks)
-    const blocks = await notion.blocks.children.list({ block_id: row.id });
-    const childrenToAppend = [];
+      // Fetch and translate blocks (e.g., images, text blocks)
+      const blocks = await notion.blocks.children.list({ block_id: row.id });
+      const childrenToAppend = [];
 
-    for (const block of blocks.results) {
-      const blockType = block.type;
-      if (blockType === "image") {
-        const imageDetails = formatBlock(block);
-        const imageFileName = `image_${generateAlphanumeric(10)}.jpg`;
-        const localImagePath = path.join(__dirname, imageFileName);
+      for (const block of blocks.results) {
+        const blockType = block.type;
+        if (blockType === "image") {
+          const imageDetails = formatBlock(block);
+          const imageFileName = `image_${generateAlphanumeric(10)}.jpg`;
+          const localImagePath = path.join(__dirname, imageFileName);
 
-        // Download and upload the image
-        await downloadImage(imageDetails.url, localImagePath);
-        const supabaseUrl = await uploadToSupabase(
-          localImagePath,
-          imageFileName
-        );
+          // Download and upload the image
+          await downloadImage(imageDetails.url, localImagePath);
+          const supabaseUrl = await uploadToSupabase(
+            localImagePath,
+            imageFileName
+          );
 
-        // Collect the image block
-        childrenToAppend.push({
-          object: "block",
-          type: "image",
-          image: { type: "external", external: { url: supabaseUrl } },
-        });
-
-        // Remove local image
-        await fs.promises.unlink(localImagePath);
-      } else {
-        // Translate text blocks
-        const originalText = formatBlock(block);
-        const translatedText = await translateText(originalText, languageKey);
-        if (translatedText) {
+          // Collect the image block
           childrenToAppend.push({
             object: "block",
-            type: blockType,
-            [blockType]: { rich_text: [{ text: { content: translatedText } }] },
+            type: "image",
+            image: { type: "external", external: { url: supabaseUrl } },
           });
+
+          // Remove local image
+          await fs.promises.unlink(localImagePath);
+        } else {
+          // Translate text blocks
+          const originalText = formatBlock(block);
+          const translatedText = await translateText(originalText, languageKey);
+          if (translatedText) {
+            childrenToAppend.push({
+              object: "block",
+              type: blockType,
+              [blockType]: {
+                rich_text: [{ text: { content: translatedText } }],
+              },
+            });
+          }
         }
       }
-    }
 
-    // Append blocks to the translated page
-    if (childrenToAppend.length > 0) {
-      await notion.blocks.children.append({
-        block_id: destinationPageId,
-        children: childrenToAppend,
-      });
-      console.log("Blocks appended successfully.");
+      // Append blocks to the translated page
+      if (childrenToAppend.length > 0) {
+        await notion.blocks.children.append({
+          block_id: destinationPageId,
+          children: childrenToAppend,
+        });
+        console.log("Blocks appended successfully.");
+      }
+      console.log(`Page translated successfully to ${languageKey}`);
+    } catch (err) {
+      console.error(`Error processing page in ${languageKey}: ${err.message}`);
     }
-    return `Page translated successfully to ${languageKey}`;
-  } catch (err) {
-    console.error(`Error processing page in ${languageKey}: ${err.message}`);
-    return `Failed to process page in ${languageKey}: ${err.message}`;
   }
 };
 
-// Main function to process all rows in the database
+// Main function to process all rows in the database sequentially
 (async function main() {
   try {
     let rows = await notion.databases.query({ database_id: sourceDatabaseID });
@@ -196,16 +201,7 @@ const processPage = async (row, languageKey, databaseId) => {
       .slice(0, 5);
 
     for (let row of rows) {
-      const results = await Promise.all(
-        Object.keys(translationDatabaseIds).map(async (languageKey) => {
-          return processPage(
-            row,
-            languageKey,
-            translationDatabaseIds[languageKey]
-          );
-        })
-      );
-      console.log("Translation results:", results);
+      await processPageSequentially(row);
     }
   } catch (error) {
     console.error("Critical error:", error.message);
