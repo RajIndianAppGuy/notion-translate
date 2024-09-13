@@ -34,7 +34,16 @@ const generateAlphanumeric = (length) => {
 const translateText = async (text, targetLanguage) => {
   if (!text) return "";
   console.log(`Translating text to ${targetLanguage}: ${text}`);
-  return await translate(text, { from: "en", to: targetLanguage });
+
+  try {
+    return await translate(text, { from: "en", to: targetLanguage });
+  } catch (error) {
+    console.error(
+      `Error translating text to ${targetLanguage}:`,
+      error.message
+    );
+    return ""; // Return an empty string in case of failure
+  }
 };
 
 // Helper: Download an image
@@ -201,15 +210,9 @@ const processPageSequentially = async (row) => {
       .slice(0, 5);
 
     for (let row of rows) {
-      console.log(`Processing row with ID: ${row.id}`);
       await processPageSequentially(row);
-      console.log(`Finished processing row with ID: ${row.id}`);
     }
   } catch (error) {
     console.error("Critical error:", error.message);
   }
 })();
-
-setInterval(() => {
-  console.log("Script is still running...");
-}, 60000);
