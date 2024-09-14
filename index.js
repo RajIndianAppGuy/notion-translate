@@ -251,7 +251,7 @@ const processPage = async (row, languageKey, databaseId) => {
         : undefined,
     };
     if (Category?.select?.name && Category?.select?.id) {
-      updateProperties.Category = {
+      updatedProperties.Category = {
         select: {
           name: Category.select.name,
         },
