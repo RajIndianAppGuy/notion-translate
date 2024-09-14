@@ -35,7 +35,7 @@ const generateAlphanumeric = (length) => {
 const translateText = async (text, targetLanguage) => {
   if (!text) return "";
 
-  //   console.log(`Translating text to ${targetLanguage}: ${text}`);
+  console.log(`Translating text to ${targetLanguage}: ${text}`);
 
   try {
     const response = await fetch(

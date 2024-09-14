@@ -1,6 +1,0 @@
-services:
-  - type: worker
-    name: translate-worker
-    env: node
-    buildCommand: "npm install"
-    startCommand: "node index.js"
