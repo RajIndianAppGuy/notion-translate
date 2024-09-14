@@ -132,20 +132,24 @@ const formatBlock = (block) => {
 // Helper: Process an individual row and translate it
 const processPage = async (row, languageKey, databaseId) => {
   try {
+    const originalName = row.properties.Name?.title?.[0]?.text?.content || "";
+    const originalDesc =
+      row.properties.Desc?.rich_text?.[0]?.text?.content || "";
     // Translate title and description
-    const translatedName = await translateText(
-      row.properties.Name.title[0].text.content,
-      languageKey
-    );
-    const translatedDesc = await translateText(
-      row.properties.Desc.rich_text[0].text.content,
-      languageKey
-    );
+    const translatedName = await translateText(originalName, languageKey);
+    const translatedDesc = await translateText(originalDesc, languageKey);
 
     // Create a page in the translation database
     const response = await notion.pages.create({
       parent: { database_id: databaseId },
-      properties: { Published: { checkbox: true } },
+      properties: {
+        Name: {
+          title: [
+            { text: { content: translatedName || originalName || "Untitled" } },
+          ],
+        },
+        Published: { checkbox: true },
+      },
     });
     const destinationPageId = response.id;
 
@@ -164,97 +168,99 @@ const processPage = async (row, languageKey, databaseId) => {
     } = row.properties;
 
     const AuthorSlug = row.properties["Author Slug"];
-
+    let updatedProperties = {
+      Name: {
+        title: [
+          { text: { content: translatedName || originalName || "Untitled" } },
+        ],
+        id: Name?.id,
+      },
+      Published: Published
+        ? {
+            checkbox: Published.checkbox,
+            id: Published.id,
+          }
+        : undefined,
+      Date: Date?.date
+        ? {
+            date: { start: Date.date.start },
+            id: Date.id,
+          }
+        : undefined,
+      Slug: {
+        rich_text: [
+          {
+            text: { content: Slug?.rich_text?.[0]?.text?.content || "" },
+          },
+        ],
+        id: Slug?.id,
+      },
+      Desc: {
+        rich_text: [
+          { text: { content: translatedDesc || originalDesc || "" } },
+        ],
+        id: Desc?.id,
+      },
+      Tags: Tags?.multi_select
+        ? {
+            multi_select: Tags.multi_select.map((tag) => ({
+              name: tag.name,
+            })),
+            id: Tags?.id,
+          }
+        : undefined,
+      OGimage:
+        OGimage?.id && OGimage?.url
+          ? {
+              id: OGimage.id,
+              url: OGimage.url,
+            }
+          : undefined,
+      keywords: keywords?.multi_select
+        ? {
+            multi_select: keywords.multi_select.map((tag) => ({
+              name: tag.name,
+            })),
+            id: keywords?.id,
+          }
+        : undefined,
+      ContainsTOC: ContainsTOC
+        ? {
+            checkbox: ContainsTOC.checkbox,
+            id: ContainsTOC?.id,
+          }
+        : undefined,
+      "Author Slug":
+        AuthorSlug?.id && AuthorSlug?.select
+          ? {
+              id: AuthorSlug.id,
+              select: {
+                name: AuthorSlug?.select?.name || "",
+              },
+            }
+          : undefined,
+      FilesAndMedia: FilesAndMedia?.files
+        ? {
+            files: FilesAndMedia.files.map((file) => ({
+              name: file.name,
+              type: file.type,
+              file: file.file,
+            })),
+            id: FilesAndMedia?.id,
+          }
+        : undefined,
+    };
+    if (Category?.select?.name && Category?.select?.id) {
+      updateProperties.Category = {
+        select: {
+          name: Category.select.name,
+        },
+        id: Category.id,
+      };
+    }
     await notion.pages.update({
       page_id: destinationPageId,
-      properties: {
-        Name: {
-          title: [{ text: { content: translatedName } }],
-          id: Name?.id,
-        },
-        Published: Published
-          ? {
-              checkbox: Published.checkbox,
-              id: Published.id,
-            }
-          : undefined,
-        Date: Date?.date
-          ? {
-              date: { start: Date.date.start },
-              id: Date.id,
-            }
-          : undefined,
-        Slug: {
-          rich_text: [
-            {
-              text: { content: Slug?.rich_text?.[0]?.text?.content || "" },
-            },
-          ],
-          id: Slug?.id,
-        },
-        Desc: {
-          rich_text: [
-            {
-              text: { content: translatedDesc },
-            },
-          ],
-          id: Desc?.id,
-        },
-        Tags: Tags?.multi_select
-          ? {
-              multi_select: Tags.multi_select.map((tag) => ({
-                name: tag.name,
-              })),
-              id: Tags?.id,
-            }
-          : undefined,
-        OGimage:
-          OGimage?.id && OGimage?.url
-            ? {
-                id: OGimage.id,
-                url: OGimage.url,
-              }
-            : undefined,
-        keywords: keywords?.multi_select
-          ? {
-              multi_select: keywords.multi_select.map((tag) => ({
-                name: tag.name,
-              })),
-              id: keywords?.id,
-            }
-          : undefined,
-        Category: {
-          select: {
-            name: Category?.select?.name || "",
-          },
-          id: Category?.id,
-        },
-        ContainsTOC: ContainsTOC
-          ? {
-              checkbox: ContainsTOC.checkbox,
-              id: ContainsTOC?.id,
-            }
-          : undefined,
-        "Author Slug":
-          AuthorSlug?.id && AuthorSlug?.select
-            ? {
-                id: AuthorSlug.id,
-                select: {
-                  name: AuthorSlug?.select?.name || "",
-                },
-              }
-            : undefined,
-        FilesAndMedia: FilesAndMedia?.files
-          ? {
-              files: FilesAndMedia.files.map((file) => ({
-                name: file.name,
-                type: file.type,
-                file: file.file,
-              })),
-              id: FilesAndMedia?.id,
-            }
-          : undefined,
-      },
+      properties: updatedProperties,
     });
 
     console.log(
@@ -573,7 +579,9 @@ const processPage = async (row, languageKey, databaseId) => {
     });
 
     for (let row of rows) {
-      console.log(`Processing blog: ${row.url}, ID: ${row.id}`);
+      // console.log(`Processing blog: ${row.url}, ID: ${row.id}`);
+      console.log(row);
+      console.log(row.properties.Name.title[0].text.content);
 
       try {
         await supabaseClient.from("translation").insert({
