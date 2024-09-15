@@ -35,8 +35,6 @@ const generateAlphanumeric = (length) => {
 const translateText = async (text, targetLanguage) => {
   if (!text) return "";
 
-  console.log(`Translating text to ${targetLanguage}: ${text}`);
-
   try {
     const response = await fetch(
       "https://notion-translate-api-l1co.onrender.com/translate",
@@ -55,6 +53,11 @@ const translateText = async (text, targetLanguage) => {
 
     // Parse the response JSON
     const data = await response.json();
+
+    console.log(
+      `Translating text to ${targetLanguage}: ${data.translatedText}`
+    );
+    console.log(data);
 
     // Return the translated text
     return data.translatedText;
@@ -135,10 +138,12 @@ const processPage = async (row, languageKey, databaseId) => {
     const originalName = row.properties.Name?.title?.[0]?.text?.content || "";
     const originalDesc =
       row.properties.Desc?.rich_text?.[0]?.text?.content || "";
+
     // Translate title and description
     const translatedName = await translateText(originalName, languageKey);
     const translatedDesc = await translateText(originalDesc, languageKey);
-
+    console.log(translatedName, "-------------------------------------");
+    console.log(translatedDesc, "-------------------------------------");
     // Create a page in the translation database
     const response = await notion.pages.create({
       parent: { database_id: databaseId },
@@ -336,7 +341,7 @@ const processPage = async (row, languageKey, databaseId) => {
       });
       console.log("Blocks appended successfully.");
     }
-
+    // translatedName;
     let translatedPageUrl;
     if (languageKey != "ko") {
       translatedPageUrl = `https://notion.so/${translatedName.replace(
